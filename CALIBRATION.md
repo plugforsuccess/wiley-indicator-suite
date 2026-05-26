@@ -1,17 +1,24 @@
 # Wiley Indicator Suite — Threshold Calibration Guide
 
-## Why this doc exists
+## TL;DR
 
-The Echo (centered RSI) and Tango (centered, double-smoothed MFI) oscillators
-ship with `Upper Threshold = 30` / `Lower Threshold = -30`. Those defaults are
-tuned for **daily** charts. On other timeframes the oscillators compress or
-expand, so a static ±30 either floods the chart with signals or — more often —
-prints none at all.
+As of the adaptive-thresholds release, Echo and Tango ship with
+**Adaptive Thresholds = on**. The rails self-calibrate per ticker and
+timeframe to the 80th / 20th percentile of the oscillator's last 200 bars,
+so you should not need to touch settings for any new chart. This document
+exists to cover the static fallback case — what to set if you toggle
+adaptive off.
 
-If you load Echo or Tango and the line clearly oscillates but no diamonds are
-plotting, the first thing to check is whether the line is actually crossing
-the threshold rails. Open the indicator settings and adjust to the values
-below for the current timeframe.
+## When the static fallback applies
+
+The "Static Upper/Lower Threshold" inputs are used only when:
+
+- The **Adaptive Thresholds** toggle is off, OR
+- The chart has fewer bars than the adaptive lookback (warmup phase), in
+  which case adaptive silently falls back to the static values.
+
+In either case, the per-timeframe values below are the recommended starting
+points.
 
 ## Recommended thresholds by timeframe
 
@@ -62,10 +69,23 @@ appropriate direction. The goal is for the oscillator to spend most of its
 time between the rails and visit the extremes a handful of times per visible
 chart period — not every bar, not never.
 
-## Phase 2 — adaptive thresholds (not yet implemented)
+## Adaptive thresholds (now the default)
 
-A more robust long-term fix is to compute `upperThresh` and `lowerThresh`
-dynamically as the 80th / 20th percentiles of the oscillator's last N bars
-(e.g. 200), replacing the static inputs. This auto-calibrates per timeframe
-and per ticker. Tracked as a Phase 2 enhancement — for now, this static
-table is the recommended workflow.
+Both pillars now compute rolling-percentile rails out of the box:
+
+- `Adaptive Thresholds` (default: **on**) — when on, the rails track the
+  oscillator's own recent percentiles, replacing the static values.
+- `Adaptive Lookback (bars)` (default: **200**) — how far back the
+  percentile window extends. Roughly 10 months on daily, 4 years on weekly.
+- `Adaptive Upper Percentile` (default: **80**) and `Adaptive Lower
+  Percentile` (default: **20**) — the bands themselves. Tighter bands
+  (e.g. 90/10) produce rarer signals; wider bands (70/30) produce more.
+
+Because the rails track the oscillator's own distribution, the line will
+spend roughly the configured fraction of its time outside each rail
+regardless of how compressed or expanded the oscillator is on a given
+chart. No per-ticker tuning required.
+
+The visible threshold lines are now `stepline` plots rather than `hline`s
+(hline requires a const value; the adaptive rails are series-valued). Color
+and placement are unchanged.

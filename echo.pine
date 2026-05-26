@@ -4,14 +4,23 @@ indicator(title="Wiley Indicator Suite — Echo", shorttitle="Echo", overlay=fal
 // ============================================================================
 // Inputs
 // ============================================================================
-srcChoice      = input.source(close, title="Price Source",                                    group="Echo — Momentum Settings")
-momLength      = input.int(14,   title="Momentum Length",     minval=2,   maxval=50,          group="Echo — Momentum Settings")
-smoothLength   = input.int(3,    title="Smoothing Length",    minval=1,   maxval=20,          group="Echo — Momentum Settings")
-upperThresh    = input.int(30,   title="Upper Threshold",     minval=10,  maxval=80,          group="Echo — Momentum Settings")
-lowerThresh    = input.int(-30,  title="Lower Threshold",     minval=-80, maxval=-10,         group="Echo — Momentum Settings")
-cooldownBars   = input.int(5,    title="Cooldown Bars",       minval=0,   maxval=50,          group="Echo — Momentum Settings")
-showHistogram  = input.bool(true, title="Show Histogram Fill",                                group="Echo — Momentum Settings")
-showThresholds = input.bool(true, title="Show Threshold Lines",                               group="Echo — Momentum Settings")
+srcChoice      = input.source(close,  title="Price Source",                                   group="Echo — Momentum Settings")
+momLength      = input.int(14,        title="Momentum Length",     minval=2,   maxval=50,     group="Echo — Momentum Settings")
+smoothLength   = input.int(3,         title="Smoothing Length",    minval=1,   maxval=20,     group="Echo — Momentum Settings")
+cooldownBars   = input.int(5,         title="Cooldown Bars",       minval=0,   maxval=50,     group="Echo — Momentum Settings")
+showHistogram  = input.bool(true,     title="Show Histogram Fill",                            group="Echo — Momentum Settings")
+showThresholds = input.bool(true,     title="Show Threshold Lines",                           group="Echo — Momentum Settings")
+
+// Adaptive thresholds auto-calibrate per ticker / timeframe by taking rolling
+// percentiles of the oscillator itself. When off, the static fallback values
+// below are used. Default = on so the indicator works out of the box on any
+// chart without manual tuning.
+adaptiveMode    = input.bool(true,  title="Adaptive Thresholds (auto-calibrate)",                                  group="Echo — Adaptive Calibration")
+adaptiveLookback = input.int(200,   title="Adaptive Lookback (bars)",            minval=50,    maxval=1000,        group="Echo — Adaptive Calibration")
+adaptiveUpperPct = input.float(80.0, title="Adaptive Upper Percentile",          minval=50.0,  maxval=99.0, step=1.0, group="Echo — Adaptive Calibration")
+adaptiveLowerPct = input.float(20.0, title="Adaptive Lower Percentile",          minval=1.0,   maxval=50.0, step=1.0, group="Echo — Adaptive Calibration")
+staticUpper      = input.int(30,    title="Static Upper Threshold (fallback)",   minval=10,    maxval=80,          group="Echo — Adaptive Calibration")
+staticLower      = input.int(-30,   title="Static Lower Threshold (fallback)",   minval=-80,   maxval=-10,         group="Echo — Adaptive Calibration")
 
 // ============================================================================
 // Calculations
@@ -24,9 +33,18 @@ centered = rawRsi - 50
 // Smoothed momentum line
 echoLine = ta.ema(centered, smoothLength)
 
+// Resolve thresholds. In adaptive mode the rails track rolling percentiles of
+// the oscillator's own recent history; during warmup (fewer bars than the
+// lookback) the percentile is na, so fall back to the static values.
+adaptUpper = ta.percentile_nearest_rank(echoLine, adaptiveLookback, adaptiveUpperPct)
+adaptLower = ta.percentile_nearest_rank(echoLine, adaptiveLookback, adaptiveLowerPct)
+
+upperThresh = adaptiveMode ? nz(adaptUpper, staticUpper) : staticUpper
+lowerThresh = adaptiveMode ? nz(adaptLower, staticLower) : staticLower
+
 // Raw bullish/bearish reversal conditions
-bullRaw = echoLine[1] <= lowerThresh and echoLine > lowerThresh and echoLine > echoLine[1]
-bearRaw = echoLine[1] >= upperThresh and echoLine < upperThresh and echoLine < echoLine[1]
+bullRaw = echoLine[1] <= lowerThresh[1] and echoLine > lowerThresh and echoLine > echoLine[1]
+bearRaw = echoLine[1] >= upperThresh[1] and echoLine < upperThresh and echoLine < echoLine[1]
 
 // Cooldown gating: suppress same-direction signals within N bars
 var int lastBullBar = na
@@ -53,11 +71,13 @@ zeroPlot = plot(0, title="Zero", color=color.new(color.white, 100), display=disp
 fillColor = echoLine >= 0 ? color.new(#4FC3F7, 75) : color.new(#F48FB1, 75)
 fill(echoPlot, zeroPlot, color=showHistogram ? fillColor : na, title="Histogram Fill")
 
-// Threshold and zero reference lines
-threshDisplay = showThresholds ? display.all : display.none
-hline(upperThresh, title="Upper Threshold", color=color.new(color.gray, 60),  linestyle=hline.style_dashed, display=threshDisplay)
-hline(lowerThresh, title="Lower Threshold", color=color.new(color.gray, 60),  linestyle=hline.style_dashed, display=threshDisplay)
-hline(0,           title="Zero Line",       color=color.new(color.white, 50), linestyle=hline.style_dotted)
+// Threshold and zero reference lines. Adaptive mode makes the rails series-
+// valued, so they're drawn with plot() rather than hline(). Gray, soft, and
+// stepline-styled so they read as reference rails (not data series).
+threshColor = showThresholds ? color.new(color.gray, 60) : color.new(color.gray, 100)
+plot(upperThresh, title="Upper Threshold", color=threshColor, style=plot.style_stepline)
+plot(lowerThresh, title="Lower Threshold", color=threshColor, style=plot.style_stepline)
+hline(0,          title="Zero Line",       color=color.new(color.white, 50), linestyle=hline.style_dotted)
 
 // Diamonds anchored at the threshold levels (suite-wide blue/pink standard)
 // With location.absolute, the series argument resolves to the y-coordinate; na hides the shape

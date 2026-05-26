@@ -4,14 +4,22 @@ indicator(title="Wiley Indicator Suite — Tango", shorttitle="Tango", overlay=f
 // ============================================================================
 // Inputs
 // ============================================================================
-srcChoice      = input.source(close, title="Price Source",                            group="Tango — Flow Settings")
-flowLength     = input.int(20,    title="Flow Length",       minval=5,  maxval=100,   group="Tango — Flow Settings")
-smoothLength   = input.int(9,     title="Smoothing Length",  minval=1,  maxval=30,    group="Tango — Flow Settings")
-upperThresh    = input.int(30,    title="Upper Threshold",   minval=10, maxval=80,    group="Tango — Flow Settings")
-lowerThresh    = input.int(-30,   title="Lower Threshold",   minval=-80, maxval=-10,  group="Tango — Flow Settings")
-cooldownBars   = input.int(8,     title="Cooldown Bars",     minval=0,  maxval=50,    group="Tango — Flow Settings")
-showHistogram  = input.bool(true, title="Show Histogram",                             group="Tango — Flow Settings")
-showThresholds = input.bool(true, title="Show Thresholds",                            group="Tango — Flow Settings")
+srcChoice      = input.source(close,  title="Price Source",                           group="Tango — Flow Settings")
+flowLength     = input.int(20,        title="Flow Length",       minval=5,  maxval=100,  group="Tango — Flow Settings")
+smoothLength   = input.int(9,         title="Smoothing Length",  minval=1,  maxval=30,   group="Tango — Flow Settings")
+cooldownBars   = input.int(8,         title="Cooldown Bars",     minval=0,  maxval=50,   group="Tango — Flow Settings")
+showHistogram  = input.bool(true,     title="Show Histogram",                            group="Tango — Flow Settings")
+showThresholds = input.bool(true,     title="Show Thresholds",                           group="Tango — Flow Settings")
+
+// Adaptive thresholds auto-calibrate per ticker / timeframe via rolling
+// percentiles of the oscillator. Default on; static fallback values are used
+// when adaptive mode is off or during warmup.
+adaptiveMode     = input.bool(true,   title="Adaptive Thresholds (auto-calibrate)",                                group="Tango — Adaptive Calibration")
+adaptiveLookback = input.int(200,     title="Adaptive Lookback (bars)",            minval=50,   maxval=1000,       group="Tango — Adaptive Calibration")
+adaptiveUpperPct = input.float(80.0,  title="Adaptive Upper Percentile",           minval=50.0, maxval=99.0, step=1.0, group="Tango — Adaptive Calibration")
+adaptiveLowerPct = input.float(20.0,  title="Adaptive Lower Percentile",           minval=1.0,  maxval=50.0, step=1.0, group="Tango — Adaptive Calibration")
+staticUpper      = input.int(30,      title="Static Upper Threshold (fallback)",   minval=10,   maxval=80,         group="Tango — Adaptive Calibration")
+staticLower      = input.int(-30,     title="Static Lower Threshold (fallback)",   minval=-80,  maxval=-10,        group="Tango — Adaptive Calibration")
 
 // ============================================================================
 // Calculations
@@ -29,14 +37,24 @@ centered = rawMfi - 50
 firstSmooth = ta.ema(centered,    smoothLength)
 tangoLine   = ta.ema(firstSmooth, smoothLength)
 
+// Resolve thresholds. Adaptive mode tracks rolling percentiles of the
+// oscillator's own history; during warmup the percentile is na, so fall back
+// to the static values.
+adaptUpper = ta.percentile_nearest_rank(tangoLine, adaptiveLookback, adaptiveUpperPct)
+adaptLower = ta.percentile_nearest_rank(tangoLine, adaptiveLookback, adaptiveLowerPct)
+
+upperThresh = adaptiveMode ? nz(adaptUpper, staticUpper) : staticUpper
+lowerThresh = adaptiveMode ? nz(adaptLower, staticLower) : staticLower
+
 // Volume gate — flow shifts must occur on above-average volume to count.
 volAvg     = ta.sma(volume, 20)
 volConfirm = volume > volAvg
 
 // Raw bull/bear conditions: cross out of the extreme zone, currently turning, on
-// confirming volume.
-bullRaw = tangoLine[1] <= lowerThresh and tangoLine > lowerThresh and tangoLine > tangoLine[1] and volConfirm
-bearRaw = tangoLine[1] >= upperThresh and tangoLine < upperThresh and tangoLine < tangoLine[1] and volConfirm
+// confirming volume. Prior-bar threshold is used on the "was at/beyond" leg so
+// drift in the adaptive rail doesn't itself register as a cross.
+bullRaw = tangoLine[1] <= lowerThresh[1] and tangoLine > lowerThresh and tangoLine > tangoLine[1] and volConfirm
+bearRaw = tangoLine[1] >= upperThresh[1] and tangoLine < upperThresh and tangoLine < tangoLine[1] and volConfirm
 
 // Cooldown gating: suppress same-direction signals within N bars.
 var int lastBullBar = na
@@ -69,13 +87,14 @@ zeroPlot = plot(0, title="Zero Baseline", color=color.new(color.white, 60), disp
 fillColor = tangoLine >= 0 ? bullFillColor : bearFillColor
 fill(linePlot, zeroPlot, color=showHistogram ? fillColor : na, title="Tango Histogram")
 
-// Threshold lines. Color is series-aware so we can honor the showThresholds toggle
-// while keeping hline's required const price argument.
-thresholdColor = showThresholds ? color.new(color.gray, 50) : color.new(color.gray, 100)
+// Threshold rails. Drawn with plot() rather than hline() because adaptive mode
+// makes them series-valued; stepline keeps the rail-like read even as the
+// values drift between bars.
+thresholdColor = showThresholds ? color.new(color.gray, 50)  : color.new(color.gray, 100)
 zeroLineColor  = showThresholds ? color.new(color.white, 60) : color.new(color.white, 100)
-hline(upperThresh, title="Upper Threshold", color=thresholdColor, linestyle=hline.style_dashed)
-hline(lowerThresh, title="Lower Threshold", color=thresholdColor, linestyle=hline.style_dashed)
-hline(0,           title="Zero Line",       color=zeroLineColor,  linestyle=hline.style_dotted)
+plot(upperThresh, title="Upper Threshold", color=thresholdColor, style=plot.style_stepline)
+plot(lowerThresh, title="Lower Threshold", color=thresholdColor, style=plot.style_stepline)
+hline(0,          title="Zero Line",       color=zeroLineColor,  linestyle=hline.style_dotted)
 
 // Diamonds — anchored at the threshold rails using absolute placement so the
 // markers sit on the same horizontal lines as the cross events that produced them
