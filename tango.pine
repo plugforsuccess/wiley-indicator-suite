@@ -1,0 +1,97 @@
+//@version=5
+indicator(title="Wiley Indicator Suite — Tango", shorttitle="Tango", overlay=false, format=format.price, precision=2)
+
+// ============================================================================
+// Inputs
+// ============================================================================
+srcChoice      = input.source(close, title="Price Source",                            group="Tango — Flow Settings")
+flowLength     = input.int(20,    title="Flow Length",       minval=5,  maxval=100,   group="Tango — Flow Settings")
+smoothLength   = input.int(9,     title="Smoothing Length",  minval=1,  maxval=30,    group="Tango — Flow Settings")
+upperThresh    = input.int(30,    title="Upper Threshold",   minval=10, maxval=80,    group="Tango — Flow Settings")
+lowerThresh    = input.int(-30,   title="Lower Threshold",   minval=-80, maxval=-10,  group="Tango — Flow Settings")
+cooldownBars   = input.int(8,     title="Cooldown Bars",     minval=0,  maxval=50,    group="Tango — Flow Settings")
+showHistogram  = input.bool(true, title="Show Histogram",                             group="Tango — Flow Settings")
+showThresholds = input.bool(true, title="Show Thresholds",                            group="Tango — Flow Settings")
+
+// ============================================================================
+// Calculations
+// ============================================================================
+
+// Money Flow Index re-centered around zero so it shares Echo's ±axis structure.
+// MFI uses hlc3 internally; centering subtracts 50 to put the neutral line at 0.
+rawMfi   = ta.mfi(hlc3, flowLength)
+centered = rawMfi - 50
+
+// Double-EMA smoothing. Tango is the slowest pillar of the suite by design — a
+// single EMA still leaves too much chop, so we apply the same EMA twice. This
+// produces the lazy sweeping curve that filters momentum head-fakes which aren't
+// backed by sustained money flow.
+firstSmooth = ta.ema(centered,    smoothLength)
+tangoLine   = ta.ema(firstSmooth, smoothLength)
+
+// Volume gate — flow shifts must occur on above-average volume to count.
+volAvg     = ta.sma(volume, 20)
+volConfirm = volume > volAvg
+
+// Raw bull/bear conditions: cross out of the extreme zone, currently turning, on
+// confirming volume.
+bullRaw = tangoLine[1] <= lowerThresh and tangoLine > lowerThresh and tangoLine > tangoLine[1] and volConfirm
+bearRaw = tangoLine[1] >= upperThresh and tangoLine < upperThresh and tangoLine < tangoLine[1] and volConfirm
+
+// Cooldown gating: suppress same-direction signals within N bars.
+var int lastBullBar = na
+var int lastBearBar = na
+
+bullDiamond = bullRaw and (na(lastBullBar) or (bar_index - lastBullBar >= cooldownBars))
+bearDiamond = bearRaw and (na(lastBearBar) or (bar_index - lastBearBar >= cooldownBars))
+
+if bullDiamond
+    lastBullBar := bar_index
+if bearDiamond
+    lastBearBar := bar_index
+
+// ============================================================================
+// Plotting
+// ============================================================================
+
+// Suite palette
+bullLineColor = color.new(#26A69A, 0)
+bearLineColor = color.new(#9C27B0, 0)
+bullFillColor = color.new(#26A69A, 75)
+bearFillColor = color.new(#9C27B0, 75)
+
+// Tango line — teal above zero, muted purple below zero
+tangoColor = tangoLine >= 0 ? bullLineColor : bearLineColor
+linePlot   = plot(tangoLine, title="Tango", color=tangoColor, linewidth=2)
+
+// Histogram fill between the line and zero, colored by sign
+zeroPlot = plot(0, title="Zero Baseline", color=color.new(color.white, 60), display=display.none)
+fillColor = tangoLine >= 0 ? bullFillColor : bearFillColor
+fill(linePlot, zeroPlot, color=showHistogram ? fillColor : na, title="Tango Histogram")
+
+// Threshold lines. Color is series-aware so we can honor the showThresholds toggle
+// while keeping hline's required const price argument.
+thresholdColor = showThresholds ? color.new(color.gray, 50) : color.new(color.gray, 100)
+zeroLineColor  = showThresholds ? color.new(color.white, 60) : color.new(color.white, 100)
+hline(upperThresh, title="Upper Threshold", color=thresholdColor, linestyle=hline.style_dashed)
+hline(lowerThresh, title="Lower Threshold", color=thresholdColor, linestyle=hline.style_dashed)
+hline(0,           title="Zero Line",       color=zeroLineColor,  linestyle=hline.style_dotted)
+
+// Diamonds — anchored at the threshold rails using absolute placement so the
+// markers sit on the same horizontal lines as the cross events that produced them
+// (suite-wide blue/pink standard).
+plotshape(bullDiamond ? lowerThresh : na, title="Tango Bull Diamond", style=shape.diamond, location=location.absolute, color=color.new(#2962FF, 0), size=size.small)
+plotshape(bearDiamond ? upperThresh : na, title="Tango Bear Diamond", style=shape.diamond, location=location.absolute, color=color.new(#FF1744, 0), size=size.small)
+
+// ============================================================================
+// Alerts
+// ============================================================================
+alertcondition(bullDiamond, title="Tango Bull Diamond", message="🔵 TANGO BULL flow confirmation on {{ticker}} {{interval}} @ {{close}}")
+alertcondition(bearDiamond, title="Tango Bear Diamond", message="🔴 TANGO BEAR flow confirmation on {{ticker}} {{interval}} @ {{close}}")
+
+// ============================================================================
+// Outputs (hidden plot streams consumed by the Scanner via request.security)
+// ============================================================================
+plot(bullDiamond ? 1 : 0, title="tango_bull",  display=display.none)
+plot(bearDiamond ? 1 : 0, title="tango_bear",  display=display.none)
+plot(tangoLine,           title="tango_value", display=display.none)
