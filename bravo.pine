@@ -11,6 +11,7 @@ srcChoice     = input.source(hl2, title="Price Source",                         
 slopeLookback = input.int(5,      title="Slope Lookback",  minval=1,   maxval=50,  group="Bravo — Trend Settings")
 showBand      = input.bool(true,  title="Show Envelope",                           group="Bravo — Trend Settings")
 showFastEma   = input.bool(true,  title="Show Fast EMA",                           group="Bravo — Trend Settings")
+showDiamonds  = input.bool(true,  title="Show Diamonds",                           group="Bravo — Trend Settings", tooltip="Hide Bravo's diamonds to declutter charts when Hardening is the primary signal layer. Output streams to Hardening are unaffected.")
 cooldownBars  = input.int(5,      title="Cooldown Bars",   minval=0,   maxval=50,  group="Bravo — Trend Settings")
 
 // ============================================================================
@@ -43,6 +44,13 @@ if bullDiamond
 if bearDiamond
     lastBearBar := bar_index
 
+// State-transition visual events: fire only on the bar where the condition
+// first becomes true after being false. Used for clean diamond rendering;
+// the output streams above remain state-continuous so Hardening's confluence
+// detection continues to work as designed.
+bullDiamondVisual = bullRaw and not bullRaw[1]
+bearDiamondVisual = bearRaw and not bearRaw[1]
+
 // ============================================================================
 // Plotting
 // ============================================================================
@@ -57,8 +65,8 @@ fill(upperPlot, lowerPlot, color=color.new(color.gray, 92), title="Envelope Fill
 plot(showFastEma ? fastEma : na, title="Fast EMA", color=color.new(#F4E4C1, 0), linewidth=2)
 
 // Diamonds: blue below for bull, pink above for bear (suite-wide color standard)
-plotshape(bullDiamond, title="Bravo Bull Diamond", style=shape.diamond, location=location.belowbar, color=color.new(#2962FF, 0), size=size.small)
-plotshape(bearDiamond, title="Bravo Bear Diamond", style=shape.diamond, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small)
+plotshape(bullDiamondVisual and showDiamonds, title="Bravo Bull Diamond", style=shape.diamond, location=location.belowbar, color=color.new(#2962FF, 0), size=size.small)
+plotshape(bearDiamondVisual and showDiamonds, title="Bravo Bear Diamond", style=shape.diamond, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small)
 
 // ============================================================================
 // Alerts
