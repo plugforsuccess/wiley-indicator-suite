@@ -16,7 +16,8 @@ echoValueSrc = input.source(close, title="Echo Value Source", group="Source Refe
 // ============================================================================
 // Floor Filters (Mandatory)
 // ============================================================================
-confluenceWindow    = input.int(5,     title="Confluence Window (bars)", minval=1, maxval=50, group="Floor Filters (Mandatory)")
+confluenceWindowBull = input.int(5,  title="Bull Confluence Window (bars)",  minval=1, maxval=200, group="Floor Filters (Mandatory)", tooltip="Bars within which all three bull pillars must align. Bullish setups (V-shaped bottoms) align quickly; default 5.")
+confluenceWindowBear = input.int(60, title="Bear Confluence Window (bars)",  minval=1, maxval=200, group="Floor Filters (Mandatory)", tooltip="Bars within which all three bear pillars must align. Bearish setups (rounded tops) form slowly because momentum peaks first, flow peaks next, and Bravo's EMA cross arrives last; default 60.")
 volumeFloorMult     = input.float(1.0, title="Volume Floor Multiplier",  minval=0.0, maxval=10.0, step=0.1, group="Floor Filters (Mandatory)")
 requireHtfAgreement = input.bool(true, title="Require Daily HTF Agreement",                       group="Floor Filters (Mandatory)")
 
@@ -49,13 +50,13 @@ labelTextSize  = input.string("tiny", title="Label Text Size", options=["tiny", 
 // ============================================================================
 // Triple Diamond Detection — all three pillars must fire within the window
 // ============================================================================
-bravoBullInWindow = ta.barssince(bravoBullSrc == 1) <= confluenceWindow
-echoBullInWindow  = ta.barssince(echoBullSrc  == 1) <= confluenceWindow
-tangoBullInWindow = ta.barssince(tangoBullSrc == 1) <= confluenceWindow
+bravoBullInWindow = ta.barssince(bravoBullSrc == 1) <= confluenceWindowBull
+echoBullInWindow  = ta.barssince(echoBullSrc  == 1) <= confluenceWindowBull
+tangoBullInWindow = ta.barssince(tangoBullSrc == 1) <= confluenceWindowBull
 
-bravoBearInWindow = ta.barssince(bravoBearSrc == 1) <= confluenceWindow
-echoBearInWindow  = ta.barssince(echoBearSrc  == 1) <= confluenceWindow
-tangoBearInWindow = ta.barssince(tangoBearSrc == 1) <= confluenceWindow
+bravoBearInWindow = ta.barssince(bravoBearSrc == 1) <= confluenceWindowBear
+echoBearInWindow  = ta.barssince(echoBearSrc  == 1) <= confluenceWindowBear
+tangoBearInWindow = ta.barssince(tangoBearSrc == 1) <= confluenceWindowBear
 
 rawTripleBull = bravoBullInWindow and echoBullInWindow and tangoBullInWindow
 rawTripleBear = bravoBearInWindow and echoBearInWindow and tangoBearInWindow
