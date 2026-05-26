@@ -31,6 +31,9 @@ useAtrGate      = input.bool(true,   title="Use ATR Expansion Gate",            
 useVixGate      = input.bool(true,   title="Use VIX Suppression Gate (longs)",                     group="Optional Gates")
 vixThreshold    = input.float(30.0,  title="VIX Suppression Threshold", minval=10.0, maxval=100.0, group="Optional Gates")
 useSpyTrendGate = input.bool(false,  title="Use SPY Trend Gate (longs)",                           group="Optional Gates")
+useChopFilter   = input.bool(false,  title="Use Chop Filter (ADX-based)",                          group="Optional Gates", tooltip="Suppress signals when ADX is below threshold. Premium signals in low-ADX (choppy) markets tend to be false. Default off to preserve historical behavior.")
+adxThreshold    = input.float(20.0,  title="ADX Chop Threshold",         minval=5.0, maxval=50.0, step=1.0, group="Optional Gates")
+adxLength       = input.int(14,      title="ADX Length",                 minval=5,   maxval=50,    group="Optional Gates")
 
 // ============================================================================
 // Tier Boosters (each adds +1 star)
@@ -103,8 +106,12 @@ spy200           = request.security("AMEX:SPY", "D", ta.sma(close, 200), lookahe
 spyTrendPassBull = not useSpyTrendGate or spy50 > spy200
 spyTrendPassBear = true
 
-gatePassBull = velocityPassBull and atrPass and vixPassBull and spyTrendPassBull
-gatePassBear = velocityPassBear and atrPass and vixPassBear and spyTrendPassBear
+// Chop filter — suppress entries when ADX indicates a directionless market
+[diPlusVal, diMinusVal, adxVal] = ta.dmi(adxLength, adxLength)
+chopPass = not useChopFilter or adxVal >= adxThreshold
+
+gatePassBull = velocityPassBull and atrPass and vixPassBull and spyTrendPassBull and chopPass
+gatePassBear = velocityPassBear and atrPass and vixPassBear and spyTrendPassBear and chopPass
 
 signalQualifiesBull = floorPassBull and gatePassBull
 signalQualifiesBear = floorPassBear and gatePassBear

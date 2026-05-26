@@ -1,0 +1,100 @@
+//@version=5
+indicator(title="Wiley Indicator Suite — Exit Meta", shorttitle="Exits", overlay=true, max_labels_count=500)
+
+// ============================================================================
+// Exit Meta visualizes exit opportunities for open positions. Wire it to the
+// same pillar outputs as Hardening; it fires markers wherever a long or short
+// position WOULD be exited under the configured triggers. The strategy file
+// (hardening_strategy.pine) implements the full state machine; this indicator
+// is for visual confirmation alongside Hardening's entry diamonds.
+// ============================================================================
+
+// ============================================================================
+// Source References — same wiring as Hardening
+// ============================================================================
+bravoBullSrc = input.source(close, title="Bravo Bull Source", group="Source References (Required)")
+bravoBearSrc = input.source(close, title="Bravo Bear Source", group="Source References (Required)")
+echoBullSrc  = input.source(close, title="Echo Bull Source",  group="Source References (Required)")
+echoBearSrc  = input.source(close, title="Echo Bear Source",  group="Source References (Required)")
+tangoBullSrc = input.source(close, title="Tango Bull Source", group="Source References (Required)")
+tangoBearSrc = input.source(close, title="Tango Bear Source", group="Source References (Required)")
+
+// ============================================================================
+// Exit Triggers
+// ============================================================================
+useEchoExit   = input.bool(true, title="Echo Reversal Exit",     group="Exit Triggers", tooltip="Exit when the opposite-direction Echo pillar fires.")
+useTangoExit  = input.bool(true, title="Tango Reversal Exit",    group="Exit Triggers", tooltip="Exit when the opposite-direction Tango pillar fires.")
+useBravoExit  = input.bool(true, title="Bravo Regime Flip Exit", group="Exit Triggers", tooltip="Exit when Bravo's trend regime flips against the position (the streamed bull/bear flag drops from 1 to 0).")
+
+// ============================================================================
+// Display Settings
+// ============================================================================
+showLongExits  = input.bool(true,  title="Show Long Exits",       group="Display Settings")
+showShortExits = input.bool(true,  title="Show Short Exits",      group="Display Settings")
+showGlyphs     = input.bool(true,  title="Show Reason Glyphs",    group="Display Settings")
+labelTextSize  = input.string("tiny", title="Label Text Size", options=["tiny", "small", "normal"], group="Display Settings")
+
+// ============================================================================
+// Trigger Detection
+// ============================================================================
+
+// Bravo regime flip — fires on the bar the streamed flag goes from 1 to 0
+bravoBullFlipDown = bravoBullSrc[1] == 1 and bravoBullSrc != 1
+bravoBearFlipDown = bravoBearSrc[1] == 1 and bravoBearSrc != 1
+
+// Long-exit triggers (an open long would be closed)
+longExitEcho  = useEchoExit  and echoBearSrc  == 1
+longExitTango = useTangoExit and tangoBearSrc == 1
+longExitBravo = useBravoExit and bravoBullFlipDown
+longExit      = longExitEcho or longExitTango or longExitBravo
+
+// Short-exit triggers (an open short would be closed)
+shortExitEcho  = useEchoExit  and echoBullSrc  == 1
+shortExitTango = useTangoExit and tangoBullSrc == 1
+shortExitBravo = useBravoExit and bravoBearFlipDown
+shortExit      = shortExitEcho or shortExitTango or shortExitBravo
+
+// ============================================================================
+// Reason Glyphs — E (Echo) / T (Tango) / B (Bravo flip)
+// ============================================================================
+longGlyphs = ""
+if longExitEcho
+    longGlyphs := longGlyphs + "E"
+if longExitTango
+    longGlyphs := longGlyphs + "T"
+if longExitBravo
+    longGlyphs := longGlyphs + "B"
+
+shortGlyphs = ""
+if shortExitEcho
+    shortGlyphs := shortGlyphs + "E"
+if shortExitTango
+    shortGlyphs := shortGlyphs + "T"
+if shortExitBravo
+    shortGlyphs := shortGlyphs + "B"
+
+// ============================================================================
+// Plotting — orange X above bar = exit long; green X below bar = exit short
+// ============================================================================
+plotshape(longExit  and showLongExits,  title="Long Exit",  style=shape.xcross, location=location.abovebar, color=color.new(#FF9100, 0), size=size.small)
+plotshape(shortExit and showShortExits, title="Short Exit", style=shape.xcross, location=location.belowbar, color=color.new(#00E676, 0), size=size.small)
+
+labelSizeResolved = labelTextSize == "tiny" ? size.tiny : labelTextSize == "small" ? size.small : size.normal
+
+if longExit and showLongExits and showGlyphs and longGlyphs != ""
+    label.new(x=bar_index, y=high, text=longGlyphs, style=label.style_none, textcolor=color.new(#FF9100, 0), size=labelSizeResolved, yloc=yloc.abovebar)
+
+if shortExit and showShortExits and showGlyphs and shortGlyphs != ""
+    label.new(x=bar_index, y=low,  text=shortGlyphs, style=label.style_none, textcolor=color.new(#00E676, 0), size=labelSizeResolved, yloc=yloc.belowbar)
+
+// ============================================================================
+// Alerts
+// ============================================================================
+alertcondition(longExit,  title="Long Exit Signal",  message='{"action":"exit","direction":"long","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+alertcondition(shortExit, title="Short Exit Signal", message='{"action":"exit","direction":"short","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+
+// ============================================================================
+// Output streams for downstream consumption (Scanner, strategy)
+// ============================================================================
+plot(longExit  ? 1 : 0, title="long_exit",  display=display.none)
+plot(shortExit ? 1 : 0, title="short_exit", display=display.none)

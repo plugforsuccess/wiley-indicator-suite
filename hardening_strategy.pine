@@ -1,0 +1,276 @@
+//@version=5
+strategy(title             = "Wiley Indicator Suite — Hardening Strategy",
+         shorttitle        = "Hardening Strategy",
+         overlay           = true,
+         max_labels_count  = 500,
+         initial_capital   = 100000,
+         default_qty_type  = strategy.fixed,
+         default_qty_value = 1,
+         pyramiding        = 0,
+         calc_on_every_tick = false,
+         process_orders_on_close = true,
+         commission_type   = strategy.commission.percent,
+         commission_value  = 0.05,
+         slippage          = 1)
+
+// ============================================================================
+// Hardening Strategy — backtestable version of hardening_meta.pine.
+//
+// Entries: identical confluence/floor/gate/booster logic to the indicator.
+// Sizing : percent-of-equity per R, scaled by star tier (★=0.25R … ★★★★=1.5R).
+// Exits  : signal-based (opposite Echo / Tango / Bravo flip) plus ATR trailing
+//          stop and asymmetric time stop (fast for longs, slow for shorts).
+// No pyramiding — one position per direction; opposite signals reverse.
+// ============================================================================
+
+// ============================================================================
+// Source References — wire to Bravo / Echo / Tango outputs (same as Hardening)
+// ============================================================================
+bravoBullSrc = input.source(close, title="Bravo Bull Source", group="Source References (Required)")
+bravoBearSrc = input.source(close, title="Bravo Bear Source", group="Source References (Required)")
+echoBullSrc  = input.source(close, title="Echo Bull Source",  group="Source References (Required)")
+echoBearSrc  = input.source(close, title="Echo Bear Source",  group="Source References (Required)")
+tangoBullSrc = input.source(close, title="Tango Bull Source", group="Source References (Required)")
+tangoBearSrc = input.source(close, title="Tango Bear Source", group="Source References (Required)")
+echoValueSrc = input.source(close, title="Echo Value Source", group="Source References (Required)")
+
+// ============================================================================
+// Floor Filters (Mandatory) — mirror Hardening
+// ============================================================================
+confluenceWindowBull = input.int(5,  title="Bull Confluence Window (bars)",  minval=1, maxval=200, group="Floor Filters (Mandatory)")
+confluenceWindowBear = input.int(60, title="Bear Confluence Window (bars)",  minval=1, maxval=200, group="Floor Filters (Mandatory)")
+volumeFloorMult      = input.float(1.0, title="Volume Floor Multiplier", minval=0.0, maxval=10.0, step=0.1, group="Floor Filters (Mandatory)")
+requireHtfAgreement  = input.bool(true, title="Require Daily HTF Agreement", group="Floor Filters (Mandatory)")
+
+// ============================================================================
+// Optional Gates — mirror Hardening
+// ============================================================================
+useVelocityGate = input.bool(true,  title="Use Echo Velocity Gate",                                group="Optional Gates")
+velocityMinPts  = input.float(15.0, title="Velocity Min Move (points)", minval=0.0, step=0.5,      group="Optional Gates")
+velocityBars    = input.int(5,      title="Velocity Lookback (bars)",   minval=1,   maxval=50,     group="Optional Gates")
+useAtrGate      = input.bool(true,  title="Use ATR Expansion Gate",                                group="Optional Gates")
+useVixGate      = input.bool(true,  title="Use VIX Suppression Gate (longs)",                      group="Optional Gates")
+vixThreshold    = input.float(30.0, title="VIX Suppression Threshold", minval=10.0, maxval=100.0, group="Optional Gates")
+useSpyTrendGate = input.bool(false, title="Use SPY Trend Gate (longs)",                            group="Optional Gates")
+useChopFilter   = input.bool(false, title="Use Chop Filter (ADX-based)",                           group="Optional Gates")
+adxThreshold    = input.float(20.0, title="ADX Chop Threshold",        minval=5.0, maxval=50.0, step=1.0, group="Optional Gates")
+adxLength       = input.int(14,     title="ADX Length",                minval=5,   maxval=50,    group="Optional Gates")
+
+// ============================================================================
+// Tier Boosters
+// ============================================================================
+useRsBooster             = input.bool(true,  title="Relative Strength Booster",  group="Tier Boosters")
+useSectorBooster         = input.bool(false, title="Sector Strength Booster (Phase 2)", group="Tier Boosters")
+useVolSpikeBooster       = input.bool(true,  title="Volume Spike Booster",       group="Tier Boosters")
+useRangeExpansionBooster = input.bool(true,  title="Range Expansion Booster",    group="Tier Boosters")
+
+// ============================================================================
+// Risk & Position Sizing — percent-of-equity per R, star-scaled
+// ============================================================================
+riskPerR     = input.float(1.0, title="Risk per R (% of equity)", minval=0.05, maxval=10.0, step=0.05, group="Risk & Position Sizing", tooltip="Percent of equity risked at 1R. Star tiers scale the actual risk: ★=0.25R, ★★=0.5R, ★★★=1R, ★★★★=1.5R.")
+stopAtrMult  = input.float(2.0, title="Initial Stop (× ATR)",     minval=0.5, maxval=10.0, step=0.1, group="Risk & Position Sizing")
+trailAtrMult = input.float(2.0, title="Trailing Stop (× ATR)",    minval=0.5, maxval=10.0, step=0.1, group="Risk & Position Sizing")
+stopAtrLen   = input.int(14,    title="ATR Length for Stops",     minval=5,   maxval=100,            group="Risk & Position Sizing")
+minStars     = input.int(1,     title="Minimum Star Tier to Trade", minval=1, maxval=4,              group="Risk & Position Sizing", tooltip="Skip entries below this tier (e.g. set to 2 to trade only ★★ and above).")
+
+// ============================================================================
+// Exits
+// ============================================================================
+useEchoExit       = input.bool(true,  title="Echo Reversal Exit",        group="Exits")
+useTangoExit      = input.bool(true,  title="Tango Reversal Exit",       group="Exits")
+useBravoExit      = input.bool(true,  title="Bravo Regime Flip Exit",    group="Exits")
+useTrailStop      = input.bool(true,  title="Use ATR Trailing Stop",     group="Exits")
+useInitialStop    = input.bool(true,  title="Use ATR Initial Stop",      group="Exits")
+useTimeStop       = input.bool(true,  title="Use Time Stop",             group="Exits")
+longTimeStopBars  = input.int(10, title="Long Time Stop (bars w/o new HH)",  minval=1, maxval=200, group="Exits", tooltip="Exit long if N bars pass without a new high since entry. Bulls peak quickly — default 10.")
+shortTimeStopBars = input.int(20, title="Short Time Stop (bars w/o new LL)", minval=1, maxval=200, group="Exits", tooltip="Exit short if N bars pass without a new low since entry. Bear setups develop slowly — default 20.")
+allowReversal     = input.bool(true,  title="Reverse on Opposite Entry Signal", group="Exits", tooltip="If a qualifying opposite-direction entry signal fires while in a position, close and flip. If off, ignore opposite signals until the position closes via stop/exit.")
+
+// ============================================================================
+// Display
+// ============================================================================
+showDiamonds   = input.bool(true,    title="Show Entry Diamonds", group="Display")
+showStops      = input.bool(true,    title="Plot Stop Levels",    group="Display")
+showStarRating = input.bool(true,    title="Show Star Rating",    group="Display")
+labelTextSize  = input.string("tiny", title="Label Text Size", options=["tiny", "small", "normal"], group="Display")
+
+// ============================================================================
+// Entry Logic — replicates hardening_meta.pine
+// ============================================================================
+bravoBullInWindow = ta.barssince(bravoBullSrc == 1) <= confluenceWindowBull
+echoBullInWindow  = ta.barssince(echoBullSrc  == 1) <= confluenceWindowBull
+tangoBullInWindow = ta.barssince(tangoBullSrc == 1) <= confluenceWindowBull
+
+bravoBearInWindow = ta.barssince(bravoBearSrc == 1) <= confluenceWindowBear
+echoBearInWindow  = ta.barssince(echoBearSrc  == 1) <= confluenceWindowBear
+tangoBearInWindow = ta.barssince(tangoBearSrc == 1) <= confluenceWindowBear
+
+rawTripleBull = bravoBullInWindow and echoBullInWindow and tangoBullInWindow
+rawTripleBear = bravoBearInWindow and echoBearInWindow and tangoBearInWindow
+
+tripleBullFire = rawTripleBull and not rawTripleBull[1]
+tripleBearFire = rawTripleBear and not rawTripleBear[1]
+
+// Floor filters
+volumeFloor = volume >= ta.sma(volume, 20) * volumeFloorMult
+htfDailyBull = request.security(syminfo.tickerid, "D", bravoBullSrc, lookahead=barmerge.lookahead_off) == 1
+htfDailyBear = request.security(syminfo.tickerid, "D", bravoBearSrc, lookahead=barmerge.lookahead_off) == 1
+htfAgreementBull = not requireHtfAgreement or htfDailyBull
+htfAgreementBear = not requireHtfAgreement or htfDailyBear
+
+floorPassBull = tripleBullFire and volumeFloor and htfAgreementBull
+floorPassBear = tripleBearFire and volumeFloor and htfAgreementBear
+
+// Optional gates
+velocityMove     = echoValueSrc - echoValueSrc[velocityBars]
+velocityPassBull = not useVelocityGate or velocityMove >=  velocityMinPts
+velocityPassBear = not useVelocityGate or velocityMove <= -velocityMinPts
+
+atrCurrent = ta.atr(14)
+atrPass    = not useAtrGate or atrCurrent > atrCurrent[5] * 1.1
+
+vixCurrent  = request.security("CBOE:VIX", "D", close, lookahead=barmerge.lookahead_off)
+vixPassBull = not useVixGate or vixCurrent < vixThreshold
+vixPassBear = true
+
+spy50  = request.security("AMEX:SPY", "D", ta.sma(close, 50),  lookahead=barmerge.lookahead_off)
+spy200 = request.security("AMEX:SPY", "D", ta.sma(close, 200), lookahead=barmerge.lookahead_off)
+spyTrendPassBull = not useSpyTrendGate or spy50 > spy200
+spyTrendPassBear = true
+
+[diPlusVal, diMinusVal, adxVal] = ta.dmi(adxLength, adxLength)
+chopPass = not useChopFilter or adxVal >= adxThreshold
+
+gatePassBull = velocityPassBull and atrPass and vixPassBull and spyTrendPassBull and chopPass
+gatePassBear = velocityPassBear and atrPass and vixPassBear and spyTrendPassBear and chopPass
+
+signalQualifiesBull = floorPassBull and gatePassBull
+signalQualifiesBear = floorPassBear and gatePassBear
+
+// Boosters & star count
+spyReturn20    = request.security("AMEX:SPY", timeframe.period, (close - close[20]) / close[20] * 100, lookahead=barmerge.lookahead_off)
+tickerReturn20 = (close - close[20]) / close[20] * 100
+rsActive       = useRsBooster and tickerReturn20 > spyReturn20
+volSpikeActive = useVolSpikeBooster and volume > ta.sma(volume, 20) * 2.0
+rangeExpansionActive = useRangeExpansionBooster and (high - low) > ta.atr(14) * 1.5
+sectorActive   = useSectorBooster and false
+
+boosterCount = (rsActive ? 1 : 0) + (volSpikeActive ? 1 : 0) + (rangeExpansionActive ? 1 : 0) + (sectorActive ? 1 : 0)
+starCount    = math.min(1 + boosterCount, 4)
+starStr      = starCount == 1 ? "★" : starCount == 2 ? "★★" : starCount == 3 ? "★★★" : starCount == 4 ? "★★★★" : ""
+
+// ============================================================================
+// Position Sizing — risk-based, star-scaled
+// ============================================================================
+rMult = starCount == 1 ? 0.25 : starCount == 2 ? 0.5 : starCount == 3 ? 1.0 : starCount == 4 ? 1.5 : 0.0
+positionRiskPct = riskPerR * rMult   // percent of equity to risk on this trade
+
+stopAtr       = ta.atr(stopAtrLen)
+stopDistance  = stopAtr * stopAtrMult
+riskDollars   = strategy.equity * (positionRiskPct / 100.0)
+qtyComputed   = stopDistance > 0 ? math.floor(riskDollars / stopDistance) : 0
+qtyComputed  := math.max(qtyComputed, 0)
+
+// ============================================================================
+// Strategy State — track per-position extremes for trailing & time stops
+// ============================================================================
+inPosition  = strategy.position_size != 0
+isLong      = strategy.position_size > 0
+isShort     = strategy.position_size < 0
+justEntered = inPosition and not (inPosition[1])
+
+var float highSinceEntry      = na
+var float lowSinceEntry       = na
+var int   barsSinceNewExtreme = 0
+var float entryAtr            = na
+
+if justEntered
+    highSinceEntry      := high
+    lowSinceEntry       := low
+    barsSinceNewExtreme := 0
+    entryAtr            := stopAtr
+else if isLong
+    if high > nz(highSinceEntry, high)
+        highSinceEntry      := high
+        barsSinceNewExtreme := 0
+    else
+        barsSinceNewExtreme := barsSinceNewExtreme + 1
+else if isShort
+    if low < nz(lowSinceEntry, low)
+        lowSinceEntry       := low
+        barsSinceNewExtreme := 0
+    else
+        barsSinceNewExtreme := barsSinceNewExtreme + 1
+else
+    highSinceEntry      := na
+    lowSinceEntry       := na
+    barsSinceNewExtreme := 0
+    entryAtr            := na
+
+// ============================================================================
+// Exit Trigger Detection
+// ============================================================================
+bravoBullFlipDown = bravoBullSrc[1] == 1 and bravoBullSrc != 1
+bravoBearFlipDown = bravoBearSrc[1] == 1 and bravoBearSrc != 1
+
+longExitSignal  = (useEchoExit  and echoBearSrc  == 1) or (useTangoExit and tangoBearSrc == 1) or (useBravoExit and bravoBullFlipDown)
+shortExitSignal = (useEchoExit  and echoBullSrc  == 1) or (useTangoExit and tangoBullSrc == 1) or (useBravoExit and bravoBearFlipDown)
+
+longTimeStopHit  = useTimeStop and barsSinceNewExtreme >= longTimeStopBars
+shortTimeStopHit = useTimeStop and barsSinceNewExtreme >= shortTimeStopBars
+
+// Stop prices
+entryPrice = strategy.position_avg_price
+longInitialStop  = useInitialStop ? entryPrice - nz(entryAtr) * stopAtrMult : na
+shortInitialStop = useInitialStop ? entryPrice + nz(entryAtr) * stopAtrMult : na
+longTrailStop    = useTrailStop   ? nz(highSinceEntry, high) - stopAtr * trailAtrMult : na
+shortTrailStop   = useTrailStop   ? nz(lowSinceEntry, low)   + stopAtr * trailAtrMult : na
+
+longEffectiveStop  = useTrailStop and useInitialStop  ? math.max(longInitialStop, longTrailStop)  : (useTrailStop ? longTrailStop  : longInitialStop)
+shortEffectiveStop = useTrailStop and useInitialStop  ? math.min(shortInitialStop, shortTrailStop) : (useTrailStop ? shortTrailStop : shortInitialStop)
+
+// ============================================================================
+// Entry & Exit Orders
+// ============================================================================
+qualifiesBull = signalQualifiesBull and starCount >= minStars and qtyComputed > 0
+qualifiesBear = signalQualifiesBear and starCount >= minStars and qtyComputed > 0
+
+canEnterLong  = qualifiesBull and (strategy.position_size == 0 or (allowReversal and isShort))
+canEnterShort = qualifiesBear and (strategy.position_size == 0 or (allowReversal and isLong))
+
+if canEnterLong
+    strategy.entry("Long",  strategy.long,  qty=qtyComputed, comment=starStr + " Bull")
+
+if canEnterShort
+    strategy.entry("Short", strategy.short, qty=qtyComputed, comment=starStr + " Bear")
+
+// Stop-based exits (continuous price-driven exit while in position)
+if isLong and not na(longEffectiveStop)
+    strategy.exit("Long Stop",  from_entry="Long",  stop=longEffectiveStop)
+
+if isShort and not na(shortEffectiveStop)
+    strategy.exit("Short Stop", from_entry="Short", stop=shortEffectiveStop)
+
+// Signal- and time-based exits (close at market)
+if isLong and (longExitSignal or longTimeStopHit)
+    strategy.close("Long",  comment=longTimeStopHit ? "TimeStop" : "ExitSig")
+
+if isShort and (shortExitSignal or shortTimeStopHit)
+    strategy.close("Short", comment=shortTimeStopHit ? "TimeStop" : "ExitSig")
+
+// ============================================================================
+// Plotting
+// ============================================================================
+plotshape(qualifiesBull and showDiamonds, title="Bull Diamond", style=shape.diamond, location=location.belowbar, color=color.new(#2962FF, 0), size=size.small)
+plotshape(qualifiesBear and showDiamonds, title="Bear Diamond", style=shape.diamond, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small)
+
+labelSizeResolved = labelTextSize == "tiny" ? size.tiny : labelTextSize == "small" ? size.small : size.normal
+
+if qualifiesBull and showDiamonds and showStarRating
+    label.new(x=bar_index, y=low,  text=starStr, style=label.style_none, textcolor=color.new(#FFFFFF, 0), size=labelSizeResolved, yloc=yloc.belowbar)
+
+if qualifiesBear and showDiamonds and showStarRating
+    label.new(x=bar_index, y=high, text=starStr, style=label.style_none, textcolor=color.new(#FFFFFF, 0), size=labelSizeResolved, yloc=yloc.abovebar)
+
+plot(showStops and isLong  ? longEffectiveStop  : na, title="Long Stop",  color=color.new(#FF9100, 30), style=plot.style_linebr, linewidth=1)
+plot(showStops and isShort ? shortEffectiveStop : na, title="Short Stop", color=color.new(#00E676, 30), style=plot.style_linebr, linewidth=1)
