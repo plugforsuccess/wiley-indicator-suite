@@ -1,0 +1,78 @@
+//@version=5
+indicator(title="Wiley Indicator Suite — Echo", shorttitle="Echo", overlay=false, format=format.price, precision=2)
+
+// ============================================================================
+// Inputs
+// ============================================================================
+srcChoice      = input.source(close, title="Price Source",                                    group="Echo — Momentum Settings")
+momLength      = input.int(14,   title="Momentum Length",     minval=2,   maxval=50,          group="Echo — Momentum Settings")
+smoothLength   = input.int(3,    title="Smoothing Length",    minval=1,   maxval=20,          group="Echo — Momentum Settings")
+upperThresh    = input.int(30,   title="Upper Threshold",     minval=10,  maxval=80,          group="Echo — Momentum Settings")
+lowerThresh    = input.int(-30,  title="Lower Threshold",     minval=-80, maxval=-10,         group="Echo — Momentum Settings")
+cooldownBars   = input.int(5,    title="Cooldown Bars",       minval=0,   maxval=50,          group="Echo — Momentum Settings")
+showHistogram  = input.bool(true, title="Show Histogram Fill",                                group="Echo — Momentum Settings")
+showThresholds = input.bool(true, title="Show Threshold Lines",                               group="Echo — Momentum Settings")
+
+// ============================================================================
+// Calculations
+// ============================================================================
+
+// Centered RSI as the base momentum oscillator (oscillates around zero)
+rawRsi   = ta.rsi(srcChoice, momLength)
+centered = rawRsi - 50
+
+// Smoothed momentum line
+echoLine = ta.ema(centered, smoothLength)
+
+// Raw bullish/bearish reversal conditions
+bullRaw = echoLine[1] <= lowerThresh and echoLine > lowerThresh and echoLine > echoLine[1]
+bearRaw = echoLine[1] >= upperThresh and echoLine < upperThresh and echoLine < echoLine[1]
+
+// Cooldown gating: suppress same-direction signals within N bars
+var int lastBullBar = na
+var int lastBearBar = na
+
+bullDiamond = bullRaw and (na(lastBullBar) or (bar_index - lastBullBar >= cooldownBars))
+bearDiamond = bearRaw and (na(lastBearBar) or (bar_index - lastBearBar >= cooldownBars))
+
+if bullDiamond
+    lastBullBar := bar_index
+if bearDiamond
+    lastBearBar := bar_index
+
+// ============================================================================
+// Plotting
+// ============================================================================
+
+// Dynamic line color: light blue above zero, light pink below
+lineColor = echoLine >= 0 ? color.new(#4FC3F7, 0) : color.new(#F48FB1, 0)
+echoPlot  = plot(echoLine, title="Echo Line", color=lineColor, linewidth=2)
+
+// Histogram fill between echoLine and zero
+zeroPlot = plot(0, title="Zero", color=color.new(color.white, 100), display=display.none)
+fillColor = echoLine >= 0 ? color.new(#4FC3F7, 75) : color.new(#F48FB1, 75)
+fill(echoPlot, zeroPlot, color=showHistogram ? fillColor : na, title="Histogram Fill")
+
+// Threshold and zero reference lines
+threshDisplay = showThresholds ? display.all : display.none
+hline(upperThresh, title="Upper Threshold", color=color.new(color.gray, 60),  linestyle=hline.style_dashed, display=threshDisplay)
+hline(lowerThresh, title="Lower Threshold", color=color.new(color.gray, 60),  linestyle=hline.style_dashed, display=threshDisplay)
+hline(0,           title="Zero Line",       color=color.new(color.white, 50), linestyle=hline.style_dotted)
+
+// Diamonds anchored at the threshold levels (suite-wide blue/pink standard)
+// With location.absolute, the series argument resolves to the y-coordinate; na hides the shape
+plotshape(bullDiamond ? lowerThresh : na, title="Echo Bull Diamond", style=shape.diamond, location=location.absolute, color=color.new(#2962FF, 0), size=size.small)
+plotshape(bearDiamond ? upperThresh : na, title="Echo Bear Diamond", style=shape.diamond, location=location.absolute, color=color.new(#FF1744, 0), size=size.small)
+
+// ============================================================================
+// Alerts
+// ============================================================================
+alertcondition(bullDiamond, title="Echo Bull Diamond", message="🔵 ECHO BULL momentum shift on {{ticker}} {{interval}} @ {{close}}")
+alertcondition(bearDiamond, title="Echo Bear Diamond", message="🔴 ECHO BEAR momentum shift on {{ticker}} {{interval}} @ {{close}}")
+
+// ============================================================================
+// Outputs (hidden plot streams consumed by the Scanner via request.security)
+// ============================================================================
+plot(bullDiamond ? 1 : 0, title="echo_bull",  display=display.none)
+plot(bearDiamond ? 1 : 0, title="echo_bear",  display=display.none)
+plot(echoLine,            title="echo_value", display=display.none)
