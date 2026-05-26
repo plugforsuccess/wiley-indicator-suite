@@ -1,0 +1,191 @@
+//@version=5
+indicator(title="Wiley Indicator Suite — Hardening Meta", shorttitle="Hardening", overlay=true, max_labels_count=500)
+
+// ============================================================================
+// Source References — wire each input to the matching output stream after
+// adding Bravo, Echo, and Tango to the chart first.
+// ============================================================================
+bravoBullSrc = input.source(close, title="Bravo Bull Source", group="Source References (Required)")
+bravoBearSrc = input.source(close, title="Bravo Bear Source", group="Source References (Required)")
+echoBullSrc  = input.source(close, title="Echo Bull Source",  group="Source References (Required)")
+echoBearSrc  = input.source(close, title="Echo Bear Source",  group="Source References (Required)")
+tangoBullSrc = input.source(close, title="Tango Bull Source", group="Source References (Required)")
+tangoBearSrc = input.source(close, title="Tango Bear Source", group="Source References (Required)")
+echoValueSrc = input.source(close, title="Echo Value Source", group="Source References (Required)")
+
+// ============================================================================
+// Floor Filters (Mandatory)
+// ============================================================================
+confluenceWindow    = input.int(5,     title="Confluence Window (bars)", minval=1, maxval=50, group="Floor Filters (Mandatory)")
+volumeFloorMult     = input.float(1.0, title="Volume Floor Multiplier",  minval=0.0, maxval=10.0, step=0.1, group="Floor Filters (Mandatory)")
+requireHtfAgreement = input.bool(true, title="Require Daily HTF Agreement",                       group="Floor Filters (Mandatory)")
+
+// ============================================================================
+// Optional Gates
+// ============================================================================
+useVelocityGate = input.bool(true,   title="Use Echo Velocity Gate",                                group="Optional Gates")
+velocityMinPts  = input.float(15.0,  title="Velocity Min Move (points)", minval=0.0, step=0.5,     group="Optional Gates")
+velocityBars    = input.int(5,       title="Velocity Lookback (bars)",   minval=1,   maxval=50,    group="Optional Gates")
+useAtrGate      = input.bool(true,   title="Use ATR Expansion Gate",                                group="Optional Gates")
+useVixGate      = input.bool(true,   title="Use VIX Suppression Gate (longs)",                     group="Optional Gates")
+vixThreshold    = input.float(30.0,  title="VIX Suppression Threshold", minval=10.0, maxval=100.0, group="Optional Gates")
+useSpyTrendGate = input.bool(false,  title="Use SPY Trend Gate (longs)",                           group="Optional Gates")
+
+// ============================================================================
+// Tier Boosters (each adds +1 star)
+// ============================================================================
+useRsBooster             = input.bool(true,  title="Relative Strength Booster (📈)",        group="Tier Boosters")
+useSectorBooster         = input.bool(false, title="Sector Strength Booster (🏭, Phase 2)", group="Tier Boosters")
+useVolSpikeBooster       = input.bool(true,  title="Volume Spike Booster (⚡)",              group="Tier Boosters")
+useRangeExpansionBooster = input.bool(true,  title="Range Expansion Booster (🎯)",          group="Tier Boosters")
+
+// ============================================================================
+// Display Settings
+// ============================================================================
+showGlyphRow   = input.bool(true,    title="Show Booster Glyph Row", group="Display Settings")
+showStarRating = input.bool(true,    title="Show Star Rating",       group="Display Settings")
+labelTextSize  = input.string("tiny", title="Label Text Size", options=["tiny", "small", "normal"], group="Display Settings")
+
+// ============================================================================
+// Triple Diamond Detection — all three pillars must fire within the window
+// ============================================================================
+bravoBullInWindow = ta.barssince(bravoBullSrc == 1) <= confluenceWindow
+echoBullInWindow  = ta.barssince(echoBullSrc  == 1) <= confluenceWindow
+tangoBullInWindow = ta.barssince(tangoBullSrc == 1) <= confluenceWindow
+
+bravoBearInWindow = ta.barssince(bravoBearSrc == 1) <= confluenceWindow
+echoBearInWindow  = ta.barssince(echoBearSrc  == 1) <= confluenceWindow
+tangoBearInWindow = ta.barssince(tangoBearSrc == 1) <= confluenceWindow
+
+rawTripleBull = bravoBullInWindow and echoBullInWindow and tangoBullInWindow
+rawTripleBear = bravoBearInWindow and echoBearInWindow and tangoBearInWindow
+
+// Fire only on the bar that completes the set
+tripleBullFire = rawTripleBull and not rawTripleBull[1]
+tripleBearFire = rawTripleBear and not rawTripleBear[1]
+
+// ============================================================================
+// Floor Filter Application — volume floor + optional daily HTF agreement
+// ============================================================================
+volumeFloor = volume >= ta.sma(volume, 20) * volumeFloorMult
+
+htfDailyBull = request.security(syminfo.tickerid, "D", bravoBullSrc, lookahead=barmerge.lookahead_off) == 1
+htfDailyBear = request.security(syminfo.tickerid, "D", bravoBearSrc, lookahead=barmerge.lookahead_off) == 1
+
+htfAgreementBull = not requireHtfAgreement or htfDailyBull
+htfAgreementBear = not requireHtfAgreement or htfDailyBear
+
+floorPassBull = tripleBullFire and volumeFloor and htfAgreementBull
+floorPassBear = tripleBearFire and volumeFloor and htfAgreementBear
+
+// ============================================================================
+// Optional Gate Application
+// ============================================================================
+
+// Echo velocity gate — Echo must have travelled at least N points over the window
+velocityMove     = echoValueSrc - echoValueSrc[velocityBars]
+velocityPassBull = not useVelocityGate or velocityMove >=  velocityMinPts
+velocityPassBear = not useVelocityGate or velocityMove <= -velocityMinPts
+
+// ATR expansion gate — current ATR must be at least 10% above ATR 5 bars ago
+atrCurrent = ta.atr(14)
+atrPass    = not useAtrGate or atrCurrent > atrCurrent[5] * 1.1
+
+// VIX suppression gate — longs only; shorts always pass
+vixCurrent  = request.security("CBOE:VIX", "D", close, lookahead=barmerge.lookahead_off)
+vixPassBull = not useVixGate or vixCurrent < vixThreshold
+vixPassBear = true
+
+// SPY trend gate — longs only; shorts always pass
+spy50            = request.security("AMEX:SPY", "D", ta.sma(close, 50),  lookahead=barmerge.lookahead_off)
+spy200           = request.security("AMEX:SPY", "D", ta.sma(close, 200), lookahead=barmerge.lookahead_off)
+spyTrendPassBull = not useSpyTrendGate or spy50 > spy200
+spyTrendPassBear = true
+
+gatePassBull = velocityPassBull and atrPass and vixPassBull and spyTrendPassBull
+gatePassBear = velocityPassBear and atrPass and vixPassBear and spyTrendPassBear
+
+signalQualifiesBull = floorPassBull and gatePassBull
+signalQualifiesBear = floorPassBear and gatePassBear
+
+// ============================================================================
+// Booster Scoring — each active booster contributes one glyph and one star
+// ============================================================================
+
+// Relative strength: ticker's 20-bar return vs SPY's 20-bar return
+spyReturn20    = request.security("AMEX:SPY", timeframe.period, (close - close[20]) / close[20] * 100, lookahead=barmerge.lookahead_off)
+tickerReturn20 = (close - close[20]) / close[20] * 100
+rsActive       = useRsBooster and tickerReturn20 > spyReturn20
+
+// Volume spike: signal-bar volume at least 2x the 20-bar SMA
+volSpikeActive = useVolSpikeBooster and volume > ta.sma(volume, 20) * 2.0
+
+// Range expansion: signal-bar true range at least 1.5x the 14-bar ATR
+rangeExpansionActive = useRangeExpansionBooster and (high - low) > ta.atr(14) * 1.5
+
+// Sector booster reserved for Phase 2 (manual sector ETF mapping)
+sectorActive = useSectorBooster and false
+
+boosterCount = (rsActive ? 1 : 0) + (volSpikeActive ? 1 : 0) + (rangeExpansionActive ? 1 : 0) + (sectorActive ? 1 : 0)
+
+// Glyph row — order is fixed: 📈 / ⚡ / 🎯 / 🏭
+glyphStr = ""
+if rsActive
+    glyphStr := glyphStr + "📈"
+if volSpikeActive
+    glyphStr := glyphStr + "⚡"
+if rangeExpansionActive
+    glyphStr := glyphStr + "🎯"
+if sectorActive
+    glyphStr := glyphStr + "🏭"
+
+// Star rating — 0 boosters → ★, 1 → ★★, 2 → ★★★, 3+ → ★★★★
+starCount = math.min(1 + boosterCount, 4)
+starStr   = starCount == 1 ? "★" : starCount == 2 ? "★★" : starCount == 3 ? "★★★" : starCount == 4 ? "★★★★" : ""
+
+// ============================================================================
+// Plotting — diamonds are uniform; tier is conveyed via labels only
+// ============================================================================
+
+// Uniform bull diamond (blue, below bar) and bear diamond (pink, above bar)
+plotshape(signalQualifiesBull, title="Bull Diamond", style=shape.diamond, location=location.belowbar, color=color.new(#2962FF, 0), size=size.small)
+plotshape(signalQualifiesBear, title="Bear Diamond", style=shape.diamond, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small)
+
+// Resolve string label size to the size.* constant
+labelSizeResolved = labelTextSize == "tiny" ? size.tiny : labelTextSize == "small" ? size.small : size.normal
+
+// Star rating — below diamond on bulls, above diamond on bears
+if signalQualifiesBull and showStarRating
+    label.new(x=bar_index, y=low, text=starStr, style=label.style_none, textcolor=color.new(#FFFFFF, 0), size=labelSizeResolved, yloc=yloc.belowbar)
+
+if signalQualifiesBear and showStarRating
+    label.new(x=bar_index, y=high, text=starStr, style=label.style_none, textcolor=color.new(#FFFFFF, 0), size=labelSizeResolved, yloc=yloc.abovebar)
+
+// Booster glyph row — above diamond on bulls, below diamond on bears
+if signalQualifiesBull and showGlyphRow and glyphStr != ""
+    label.new(x=bar_index, y=low, text=glyphStr, style=label.style_none, textcolor=color.new(#2962FF, 20), size=labelSizeResolved, yloc=yloc.belowbar)
+
+if signalQualifiesBear and showGlyphRow and glyphStr != ""
+    label.new(x=bar_index, y=high, text=glyphStr, style=label.style_none, textcolor=color.new(#FF1744, 20), size=labelSizeResolved, yloc=yloc.abovebar)
+
+// ============================================================================
+// Alerts — one condition per star tier per direction (8 total)
+// ============================================================================
+alertcondition(signalQualifiesBull and starCount == 1, title="★ Bull Triple (Base)",                  message='{"stars":1,"direction":"bull","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+alertcondition(signalQualifiesBull and starCount == 2, title="★★ Bull Triple (Confirmed)",            message='{"stars":2,"direction":"bull","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+alertcondition(signalQualifiesBull and starCount == 3, title="★★★ Bull Triple (Strong)",              message='{"stars":3,"direction":"bull","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+alertcondition(signalQualifiesBull and starCount == 4, title="★★★★ Bull Triple (Premium) — PRIORITY", message='{"stars":4,"direction":"bull","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+
+alertcondition(signalQualifiesBear and starCount == 1, title="★ Bear Triple (Base)",                  message='{"stars":1,"direction":"bear","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+alertcondition(signalQualifiesBear and starCount == 2, title="★★ Bear Triple (Confirmed)",            message='{"stars":2,"direction":"bear","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+alertcondition(signalQualifiesBear and starCount == 3, title="★★★ Bear Triple (Strong)",              message='{"stars":3,"direction":"bear","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+alertcondition(signalQualifiesBear and starCount == 4, title="★★★★ Bear Triple (Premium) — PRIORITY", message='{"stars":4,"direction":"bear","ticker":"{{ticker}}","tf":"{{interval}}","price":{{close}}}')
+
+// ============================================================================
+// Outputs (hidden plot streams for the Scanner)
+// ============================================================================
+plot(signalQualifiesBull and starCount >= 3 ? 1 : 0, title="stars3plus_bull", display=display.none)
+plot(signalQualifiesBull and starCount >= 4 ? 1 : 0, title="stars4_bull",     display=display.none)
+plot(signalQualifiesBear and starCount >= 3 ? 1 : 0, title="stars3plus_bear", display=display.none)
+plot(signalQualifiesBear and starCount >= 4 ? 1 : 0, title="stars4_bear",     display=display.none)
+plot(starCount,                                      title="current_stars",   display=display.none)
