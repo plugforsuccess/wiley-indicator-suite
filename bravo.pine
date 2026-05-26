@@ -1,0 +1,73 @@
+//@version=5
+indicator(title="Wiley Indicator Suite — Bravo", shorttitle="Bravo", overlay=true, max_labels_count=500)
+
+// ============================================================================
+// Inputs
+// ============================================================================
+bandLength    = input.int(200,    title="Band Length",     minval=20,  maxval=500, group="Bravo — Trend Settings")
+fastLength    = input.int(21,     title="Fast EMA Length", minval=5,   maxval=100, group="Bravo — Trend Settings")
+bandMult      = input.float(2.0,  title="Band Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Bravo — Trend Settings")
+srcChoice     = input.source(hl2, title="Price Source",                            group="Bravo — Trend Settings")
+slopeLookback = input.int(5,      title="Slope Lookback",  minval=1,   maxval=50,  group="Bravo — Trend Settings")
+showBand      = input.bool(true,  title="Show Envelope",                           group="Bravo — Trend Settings")
+showFastEma   = input.bool(true,  title="Show Fast EMA",                           group="Bravo — Trend Settings")
+cooldownBars  = input.int(5,      title="Cooldown Bars",   minval=0,   maxval=50,  group="Bravo — Trend Settings")
+
+// ============================================================================
+// Calculations
+// ============================================================================
+
+// Keltner-style envelope: EMA basis ± (ATR * multiplier)
+basis     = ta.ema(srcChoice, bandLength)
+rangeAtr  = ta.atr(bandLength)
+upperBand = basis + (rangeAtr * bandMult)
+lowerBand = basis - (rangeAtr * bandMult)
+
+// Fast EMA and its slope over the lookback window
+fastEma   = ta.ema(srcChoice, fastLength)
+fastSlope = fastEma - fastEma[slopeLookback]
+
+// Raw bull/bear condition checks (all four legs must align)
+bullRaw = close > basis and fastEma > basis and fastSlope > 0 and close > close[1]
+bearRaw = close < basis and fastEma < basis and fastSlope < 0 and close < close[1]
+
+// Cooldown gating: suppress same-direction signals within N bars
+var int lastBullBar = na
+var int lastBearBar = na
+
+bullDiamond = bullRaw and (na(lastBullBar) or (bar_index - lastBullBar >= cooldownBars))
+bearDiamond = bearRaw and (na(lastBearBar) or (bar_index - lastBearBar >= cooldownBars))
+
+if bullDiamond
+    lastBullBar := bar_index
+if bearDiamond
+    lastBearBar := bar_index
+
+// ============================================================================
+// Plotting
+// ============================================================================
+
+// Envelope lines and fill
+upperPlot = plot(showBand ? upperBand : na, title="Upper Band", color=color.new(color.gray, 70))
+basisPlot = plot(showBand ? basis     : na, title="Basis",      color=color.new(color.white, 50))
+lowerPlot = plot(showBand ? lowerBand : na, title="Lower Band", color=color.new(color.gray, 70))
+fill(upperPlot, lowerPlot, color=color.new(color.gray, 92), title="Envelope Fill")
+
+// Fast EMA — warm cream tone, matches suite aesthetic
+plot(showFastEma ? fastEma : na, title="Fast EMA", color=color.new(#F4E4C1, 0), linewidth=2)
+
+// Diamonds: blue below for bull, pink above for bear (suite-wide color standard)
+plotshape(bullDiamond, title="Bravo Bull Diamond", style=shape.diamond, location=location.belowbar, color=color.new(#2962FF, 0), size=size.small)
+plotshape(bearDiamond, title="Bravo Bear Diamond", style=shape.diamond, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small)
+
+// ============================================================================
+// Alerts
+// ============================================================================
+alertcondition(bullDiamond, title="Bravo Bull Diamond", message="🔵 BRAVO BULL on {{ticker}} {{interval}} @ {{close}}")
+alertcondition(bearDiamond, title="Bravo Bear Diamond", message="🔴 BRAVO BEAR on {{ticker}} {{interval}} @ {{close}}")
+
+// ============================================================================
+// Outputs (hidden plot streams consumed by the Scanner via request.security)
+// ============================================================================
+plot(bullDiamond ? 1 : 0, title="bravo_bull", display=display.none)
+plot(bearDiamond ? 1 : 0, title="bravo_bear", display=display.none)
